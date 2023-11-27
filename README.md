@@ -25,5 +25,7 @@ Input:
 5. The end index ```j``` of the last gene to sample (exclusive).
 6. The output directory ```output_dir```.
 
+```Usage: target/release/sample_rust <species_tree_path> <gene_trees_path> <n_sampled_nodes> <start_index> <end_index> <output_dir>```
+
 Output:
 ```output_dir``` will contain the sampled species tree ```output_dir/sampled_species_tree.nwk``` as well as the sampled gene trees ```output_dir/sampled_gene_i.nwk```.
