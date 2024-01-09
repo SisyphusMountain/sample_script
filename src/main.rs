@@ -1,4 +1,23 @@
 /*
+SCRIPT sample_rust
+--------------------------------------------------------------------------------
+This script takes:
+<species_tree_path> <gene_trees_path> <n_sampled_nodes> <start_index> <end_index> <output_dir> <rng_seed>
+- a tree in a format like such: ((a:1.0,b:1.0)c:1.0,d:2.0)e:0.0; (with necessary ; at the end, and no [&R] at the beginning)
+- a path to the folder containing the corresponding gene trees in newick format, with filenames gene_folder/gene_i.nwk
+- the number of leaves we want to keep on the species tree, and hence on all the gene trees.
+- the start and index of the gene trees to which we want to apply the sampling. If you want to sample all
+n gene trees you should put 0 n
+- the output directory of the newick files
+- the seed for the random number generators
+--------------------------------------------------------------------------------
+Output:
+new files created: 
+- output_folder/sampled_gene_i.nwk (sampled gene tree corresponding to the newick file gene_tree_path/gene_i.nwk)
+- output_folder/sampled_species_tree.nwk (sampled species tree)
+--------------------------------------------------------------------------------
+
+
 This code should read a species tree and a list of gene trees, and sample a 
 subset of the leaves.
 To do this, we can do the same operation as in the horizontal gene transfer
@@ -42,7 +61,8 @@ use std::env;
 use std::fs::File;
 use rand::seq::SliceRandom;
 extern crate regex;
-use rand::{thread_rng};
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 #[derive(Clone, Debug)]
 
 
@@ -386,13 +406,12 @@ fn find_all_leaves(flat_tree: &Vec<FlatNode>) -> Vec<usize> {
     leaves
 }
 // Choose random leaves uniformly
-fn sample_random_leaves(flat_tree: &Vec<FlatNode>, n_sampled_nodes: usize) -> Vec<usize> {
+fn sample_random_leaves(flat_tree: &Vec<FlatNode>, n_sampled_nodes: usize, rng: &mut StdRng) -> Vec<usize> {
     // This function samples n_sampled_nodes random leaves from the tree.
     // First, we find all the leaves.
     let leaves = find_all_leaves(flat_tree);
     // Then, we sample n_sampled_nodes of them.
-    let mut rng = thread_rng();
-    let sampled_leaves: Vec<usize> = leaves.choose_multiple(&mut rng, n_sampled_nodes).cloned().collect();
+    let sampled_leaves: Vec<usize> = leaves.choose_multiple(rng, n_sampled_nodes).cloned().collect();
     sampled_leaves
 }
 // Find the leaves to be removed (Complement of leaves to be kept)
@@ -532,7 +551,7 @@ fn one_gene_sample_to_string(sampled_leaves_names: &Vec<String>, leaves_to_be_re
 
     Ok(reconstructed_newick)
 }
-fn species_tree_sample_to_string(species_tree_path: &str, n_sampled_nodes: usize, output_dir: &str) -> Result<(String, Vec<String>, Vec<String>), io::Error> {
+fn species_tree_sample_to_string(species_tree_path: &str, n_sampled_nodes: usize, output_dir: &str, rng: &mut StdRng) -> Result<(String, Vec<String>, Vec<String>), io::Error> {
     /*
     Samples the given number of nodes in the species tree, and returns the list of names of sampled nodes, as well as unsampled nodes.
     1. Convert the species tree to a flat tree.
@@ -573,7 +592,7 @@ fn species_tree_sample_to_string(species_tree_path: &str, n_sampled_nodes: usize
     let _ = node_to_flat(&species_tree[0], &mut flat_tree, None);
     
     // 1. Sample the leaves.
-    let sampled_leaves = sample_random_leaves(&flat_tree, n_sampled_nodes);
+    let sampled_leaves = sample_random_leaves(&flat_tree, n_sampled_nodes, rng);
     // 2. Construct the species tree by removing the unsampled leaves from the species tree.
     // 2.1. Apply the function remove_all_unsampled to the flat tree.
     let leaves_to_be_removed = leaves_to_be_removed(&find_all_leaves(&flat_tree), &sampled_leaves);
@@ -629,8 +648,8 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     // Ensure the correct number of arguments are provided
-    if args.len() != 7 {
-        eprintln!("Usage: {} <species_tree_path> <gene_trees_path> <n_sampled_nodes> <start_index> <end_index> <output_dir>", args[0]);
+    if args.len() != 8 {
+        eprintln!("Usage: {} <species_tree_path> <gene_trees_path> <n_sampled_nodes> <start_index> <end_index> <output_dir> <rng_seed>", args[0]);
         eprintln!("Received arguments: {:?}", args);
         return; // Exit early if the wrong number of arguments
     }
@@ -662,8 +681,16 @@ fn main() {
         }
     };
     let output_dir = &args[6];
+    let rng_seed_str = &args[7];
+    // Convert rng_seed_str to u64
+    let seed = rng_seed_str.parse::<u64>().unwrap_or_else(|e| {
+        eprintln!("Error parsing RNG seed: {}", e);
+        std::process::exit(1);
+    });
+
+    let mut rng = StdRng::seed_from_u64(seed);
     // Sample the species tree
-    let result = species_tree_sample_to_string(species_tree_path, n_sampled_nodes, output_dir);
+    let result = species_tree_sample_to_string(species_tree_path, n_sampled_nodes, output_dir, &mut rng);
     let (sampled_leaves_names, leaves_to_be_removed_names) = match result {
         Ok((_, sampled_names, removed_names)) => (sampled_names, removed_names),
         Err(e) => {
@@ -674,6 +701,7 @@ fn main() {
             return;
         }
     };
+
     // Sample the gene trees
 
 
