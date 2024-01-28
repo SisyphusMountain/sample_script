@@ -2,7 +2,7 @@
 SCRIPT sample_rust
 --------------------------------------------------------------------------------
 This script takes:
-<species_tree_path> <gene_trees_path> <n_sampled_nodes> <start_index> <end_index> <output_dir> <rng_seed>
+<species_tree_path> <sampled_species_tree_path> <gene_trees_path> <n_sampled_nodes> <start_index> <end_index> <output_dir> <rng_seed>
 - a tree in a format like such: ((a:1.0,b:1.0)c:1.0,d:2.0)e:0.0; (with necessary ; at the end, and no [&R] at the beginning)
 - a path to the folder containing the corresponding gene trees in newick format, with filenames gene_folder/gene_i.nwk
 - the number of leaves we want to keep on the species tree, and hence on all the gene trees.
@@ -48,6 +48,10 @@ STEPS:
         (With find_leaves_in_gene_tree)
     6.3. Reconstruct the sampled gene tree, by SPR moves, disconnecting unsampled leaves, using the leaves_in_gene_tree vector
     6.4. Save the newick string of the sampled gene tree to a file.
+
+
+
+The script samples leaves, but only from the extant ones.
 */
 
 #[macro_use]
@@ -56,7 +60,7 @@ extern crate pest_derive;
 use pest::Parser;
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::env;
 use std::fs::File;
 use rand::seq::SliceRandom;
@@ -405,11 +409,25 @@ fn find_all_leaves(flat_tree: &Vec<FlatNode>) -> Vec<usize> {
     }
     leaves
 }
+
+fn find_all_extant_leaves(flat_tree: &Vec<FlatNode>, flat_sampled_tree: &Vec<FlatNode>) -> Vec<usize> {
+    let mut leaves: Vec<usize> = Vec::new();
+    for (i, node) in flat_tree.iter().enumerate() {
+        if node.left_child.is_none() && node.right_child.is_none() {
+            // Check if this leaf node is present in flat_sampled_tree
+            if flat_sampled_tree.iter().any(|sampled_node| sampled_node.name == node.name) {
+                leaves.push(i);
+            }
+        }
+    }
+    leaves
+}
 // Choose random leaves uniformly
-fn sample_random_leaves(flat_tree: &Vec<FlatNode>, n_sampled_nodes: usize, rng: &mut StdRng) -> Vec<usize> {
+fn sample_random_leaves(flat_tree: &Vec<FlatNode>, flat_sampled_tree: &Vec<FlatNode>, n_sampled_nodes: usize, rng: &mut StdRng) -> Vec<usize> {
     // This function samples n_sampled_nodes random leaves from the tree.
+    // We make it so that it only samples extant leaves
     // First, we find all the leaves.
-    let leaves = find_all_leaves(flat_tree);
+    let leaves = find_all_extant_leaves(flat_tree, flat_sampled_tree);
     // Then, we sample n_sampled_nodes of them.
     let sampled_leaves: Vec<usize> = leaves.choose_multiple(rng, n_sampled_nodes).cloned().collect();
     sampled_leaves
@@ -487,7 +505,7 @@ fn depths_to_lengths(node: &mut Node, parent_depth: f64) {
     }
 }
 // Returns and saves a gene tree with sampled leaves
-fn one_gene_sample_to_string(sampled_leaves_names: &Vec<String>, leaves_to_be_removed_names: &Vec<String>, gene_tree_path: &str, gene_index: u32, output_dir: &str) -> Result<String, io::Error> {
+fn one_gene_sample_to_string(sampled_leaves_names: &Vec<String>, leaves_to_be_removed_names: &Vec<String>, gene_tree_path: &PathBuf, gene_index: u32, output_dir: &str) -> Result<String, io::Error> {
     /*
     Samples all the species in the gene tree.
     1. Find the indexes of the sampled leaves thanks to their names.
@@ -508,8 +526,9 @@ fn one_gene_sample_to_string(sampled_leaves_names: &Vec<String>, leaves_to_be_re
         */
     // 0. Open the gene tree and convert it to a flat tree.
     //println!("gene_tree_path {:?}", gene_tree_path);
-    let gene_tree = fs::read_to_string(gene_tree_path)
-        .expect("Error reading gene tree");
+    let gene_tree = fs::read_to_string(&gene_tree_path)
+        .unwrap_or_else(|err| panic!("Error reading file '{}': {}", gene_tree_path.to_string_lossy(), err));
+
 
     let gene_tree = gene_tree.trim();
     let mut gene_tree = NewickParser::parse(Rule::newick, gene_tree)
@@ -551,7 +570,7 @@ fn one_gene_sample_to_string(sampled_leaves_names: &Vec<String>, leaves_to_be_re
 
     Ok(reconstructed_newick)
 }
-fn species_tree_sample_to_string(species_tree_path: &str, n_sampled_nodes: usize, output_dir: &str, rng: &mut StdRng) -> Result<(String, Vec<String>, Vec<String>), io::Error> {
+fn species_tree_sample_to_string(species_tree_path: &str, sampled_species_tree_path: &str, n_sampled_nodes: usize, output_dir: &str, rng: &mut StdRng) -> Result<(String, Vec<String>, Vec<String>), io::Error> {
     /*
     Samples the given number of nodes in the species tree, and returns the list of names of sampled nodes, as well as unsampled nodes.
     1. Convert the species tree to a flat tree.
@@ -581,18 +600,26 @@ fn species_tree_sample_to_string(species_tree_path: &str, n_sampled_nodes: usize
     // 0. Open the species tree and convert it to a flat tree.
     let species_tree = fs::read_to_string(species_tree_path)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    let sampled_species_tree = fs::read_to_string(sampled_species_tree_path)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
     let species_tree = species_tree.trim();
+    let sampled_species_tree = sampled_species_tree.trim();
     let mut species_tree = NewickParser::parse(Rule::newick, species_tree)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    let mut sampled_species_tree = NewickParser::parse(Rule::newick, sampled_species_tree)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
     let mut species_tree = newick_to_tree(species_tree.next().unwrap());
+    let sampled_species_tree = newick_to_tree(sampled_species_tree.next().unwrap());
     let root_length = species_tree[0].length.clone();
     let _ = give_depth(&mut species_tree[0], root_length);
     let mut flat_tree: Vec<FlatNode> = Vec::new();
     // Populate the flat tree with the species tree.
     let _ = node_to_flat(&species_tree[0], &mut flat_tree, None);
-    
+    let mut flat_sampled_tree = Vec::new();
+    let _ = node_to_flat(&sampled_species_tree[0], &mut flat_sampled_tree, None);
+
     // 1. Sample the leaves.
-    let sampled_leaves = sample_random_leaves(&flat_tree, n_sampled_nodes, rng);
+    let sampled_leaves = sample_random_leaves(&flat_tree, &flat_sampled_tree, n_sampled_nodes, rng);
     // 2. Construct the species tree by removing the unsampled leaves from the species tree.
     // 2.1. Apply the function remove_all_unsampled to the flat tree.
     let leaves_to_be_removed = leaves_to_be_removed(&find_all_leaves(&flat_tree), &sampled_leaves);
@@ -631,8 +658,10 @@ fn sample_all_gene_trees(sampled_leaves_names: &Vec<String>, leaves_to_be_remove
     - The index of the first gene tree to sample.
     - The index of the last gene tree to sample.
      */
+    let gene_trees_path = Path::new(gene_trees_path);
     for i in start_index..end_index {
-        let gene_tree_path = format!("{}/genes/gene_{}.nwk", gene_trees_path, i);
+        let gene_tree_filename = format!("gene_{}.nwk", i);
+        let gene_tree_path = gene_trees_path.join("genes").join(gene_tree_filename);
         let _ = one_gene_sample_to_string(
             sampled_leaves_names,
             leaves_to_be_removed_names,
@@ -648,40 +677,41 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     // Ensure the correct number of arguments are provided
-    if args.len() != 8 {
-        eprintln!("Usage: {} <species_tree_path> <gene_trees_path> <n_sampled_nodes> <start_index> <end_index> <output_dir> <rng_seed>", args[0]);
+    if args.len() != 9 {
+        eprintln!("Usage: {} <species_tree_path> <sampled_species_tree_path> <gene_trees_path> <n_sampled_nodes> <start_index> <end_index> <output_dir> <rng_seed>", args[0]);
         eprintln!("Received arguments: {:?}", args);
         return; // Exit early if the wrong number of arguments
     }
 
     let species_tree_path = &args[1];
-    let gene_trees_path = &args[2];
-    let n_sampled_nodes = match args[3].parse::<usize>() {
+    let sampled_species_tree_path = &args[2];
+    let gene_trees_path = &args[3];
+    let n_sampled_nodes = match args[4].parse::<usize>() {
         Ok(num) => num,
         Err(_) => {
-            eprintln!("Error: n_sampled_nodes must be an integer. Received: {}", args[3]);
+            eprintln!("Error: n_sampled_nodes must be an integer. Received: {}", args[4]);
             eprintln!("All arguments: {:?}", args);
             return;
         }
     };
-    let start_index = match args[4].parse::<usize>() {
+    let start_index = match args[5].parse::<usize>() {
         Ok(num) => num,
         Err(_) => {
-            eprintln!("Error: start_index must be an integer. Received: {}", args[4]);
+            eprintln!("Error: start_index must be an integer. Received: {}", args[5]);
             eprintln!("All arguments: {:?}", args);
             return;
         }
     };
-    let end_index = match args[5].parse::<usize>() {
+    let end_index = match args[6].parse::<usize>() {
         Ok(num) => num,
         Err(_) => {
-            eprintln!("Error: end_index must be an integer. Received: {}", args[5]);
+            eprintln!("Error: end_index must be an integer. Received: {}", args[6]);
             eprintln!("All arguments: {:?}", args);
             return;
         }
     };
-    let output_dir = &args[6];
-    let rng_seed_str = &args[7];
+    let output_dir = &args[7];
+    let rng_seed_str = &args[8];
     // Convert rng_seed_str to u64
     let seed = rng_seed_str.parse::<u64>().unwrap_or_else(|e| {
         eprintln!("Error parsing RNG seed: {}", e);
@@ -690,7 +720,7 @@ fn main() {
 
     let mut rng = StdRng::seed_from_u64(seed);
     // Sample the species tree
-    let result = species_tree_sample_to_string(species_tree_path, n_sampled_nodes, output_dir, &mut rng);
+    let result = species_tree_sample_to_string(species_tree_path, sampled_species_tree_path, n_sampled_nodes, output_dir, &mut rng);
     let (sampled_leaves_names, leaves_to_be_removed_names) = match result {
         Ok((_, sampled_names, removed_names)) => (sampled_names, removed_names),
         Err(e) => {
