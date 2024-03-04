@@ -1,5 +1,5 @@
 /*
-SCRIPT sample_rust
+SCRIPT sample_script
 --------------------------------------------------------------------------------
 This script takes:
 <species_tree_path> <sampled_species_tree_path> <gene_trees_path> <n_sampled_nodes> <start_index> <end_index> <output_dir> <rng_seed>
